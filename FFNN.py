@@ -17,6 +17,9 @@ class Neuron:
             output += f'{str(weight)} '
         return output[:-1]
 
+    def size(self):
+        return len(self.weights)
+
     def initialize_random(self, input_size):
         self.weights = []
         for _ in range(input_size):
@@ -31,19 +34,32 @@ class Neuron:
         return sum([input[i] * self.weights[i] for i in range(len(input))]) + self.weights[-1]
 
     def transfer(self, activation):
-        return 1.0 / (1.0 + exp(-activation))
+        try:
+            return 1.0 / (1.0 + exp(-activation))
+        except OverflowError:
+            return float('inf')
 
     def transfer_derivative(self, output):
         return output * (1.0 - output)
 
     def forward_pass(self, input):
         self.output = self.transfer(self.activation(input))
-        return self.output  # TODO: Something wrong?
+        return self.output
 
-    def backward_pass(self, expected_output):
+    def delta_error(self, expected_output):
         error = self.output - expected_output
         self.delta = error * self.transfer_derivative(self.output)
-        print(self.delta)
+
+    def backward_pass(self, index, next_layer):
+        self.delta = 0
+        for neuron in next_layer.neurons:
+            self.delta += neuron.weights[index] * neuron.delta
+
+    def update_weights(self, prev_layer_outputs, learning_rate):
+        for i, prev_layer_output in enumerate(prev_layer_outputs):
+            self.weights[i] -= learning_rate * \
+                self.delta * prev_layer_output
+        self.weights[-1] -= learning_rate * self.delta  # Bias
 
 
 class Layer:
@@ -61,6 +77,9 @@ class Layer:
             output += f'{str(neuron)}\t'
         return output[:-1]
 
+    def size(self):
+        return [neuron.size() for neuron in self.neurons]
+
     def initialize_random(self, input_size):
         for neuron in self.neurons:
             neuron.initialize_random(input_size=input_size)
@@ -75,9 +94,18 @@ class Layer:
             output.append(neuron.forward_pass(input=input))
         return output
 
-    def backward_pass(self, expected_outputs):
+    def last_layer_error(self, expected_outputs):
         for neuron, expected_output in zip(self.neurons, expected_outputs):
-            neuron.backward_pass(expected_output=expected_output)
+            neuron.delta_error(expected_output=expected_output)
+
+    def backward_pass(self, next_layer):
+        for i, neuron in enumerate(self.neurons):
+            neuron.backward_pass(index=i, next_layer=next_layer)
+
+    def update_weights(self, prev_layer_outputs, learning_rate):
+        for neuron in self.neurons:
+            neuron.update_weights(prev_layer_outputs=prev_layer_outputs,
+                                  learning_rate=learning_rate)
 
 
 class NeuralNetwork:
@@ -93,6 +121,9 @@ class NeuralNetwork:
         for i, layer in enumerate(self.layers):
             output += f'Layer {i}:\n{str(layer)}\n'
         return output[:-1]
+
+    def size(self):
+        return [layer.size() for layer in self.layers]
 
     def initialize_random(self, input_size, layer_sizes):
         self.layers = []
@@ -117,17 +148,36 @@ class NeuralNetwork:
         with open(self.file_name, 'w') as f:
             f.writelines([f"{str(layer)}\n" for layer in self.layers])
 
-    def forward_pass(self, input):
+    def forward_pass(self, inputs):
         for layer in self.layers:
-            input = layer.forward_pass(input)
-        return input
+            inputs = layer.forward_pass(inputs)
+        return inputs
 
     def backward_pass(self, expected_outputs):
-        for layer in reversed(self.layers):
-            expected_outputs = layer.backward_pass(expected_outputs)
+        last_layer = self.layers[-1]
+        last_layer.last_layer_error(expected_outputs=expected_outputs)
+        for layer in reversed(self.layers[:-1]):
+            layer.backward_pass(next_layer=last_layer)
+            last_layer = layer
 
+    def update_weights(self, inputs, learning_rate):
+        prev_layer_outputs = inputs
+        for layer in self.layers:
+            layer.update_weights(prev_layer_outputs=prev_layer_outputs,
+                                 learning_rate=learning_rate)
+            prev_layer_outputs = [neuron.output for neuron in layer.neurons]
 
-# nn = NeuralNetwork(file_name="test_weights/test2")
-# nn.load_weights()
-# nn.forward_pass([1, 0])
-# nn.backward_pass(expected_outputs=[0, 1])
+    def train(self, training_data, training_data_outputs, epochs, learning_rate):
+        for epoch in range(epochs):
+            sum_error = 0
+            for inputs, expected_outputs in zip(training_data, training_data_outputs):
+                outputs = self.forward_pass(inputs=inputs)
+                sum_error += sum([(expected_outputs[i] - outputs[i])
+                                 ** 2 for i in range(len(expected_outputs))])
+                self.backward_pass(expected_outputs=expected_outputs)
+                self.update_weights(inputs=inputs, learning_rate=learning_rate)
+            print(
+                f'Epoch: {epoch}, l_rate: {learning_rate}, error: {sum_error}')
+
+    def predict(self, inputs):
+        return self.forward_pass(inputs=inputs)
